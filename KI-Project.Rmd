@@ -1,0 +1,223 @@
+---
+title: "KI - Project"
+author: "Anna Sofie Christensen, Carrie Lovejoy, Sofie Schubert Elving"
+date: '2022-12-30'
+output: html_document
+---
+
+```{r}
+library(tidyverse)
+library(dplyr)
+library("survival")
+library("truncreg")
+```
+The data set can be found here:
+https://www.kaggle.com/datasets/reihanenamdari/breast-cancer?resource=download
+
+## 1) The data and alterations
+
+```{r}
+bc <- read.csv("C:/Users/sofel/OneDrive/Dokumenter/AarhusUniversitet/3.semester/KI/R/Breast_Cancer.csv")
+```
+
+We alternate our data a bit:
+
+We first change our Age variable to be age after 30:
+```{r}
+bc$Age <- bc$Age - 30
+```
+
+Then changing Status, Progesterone.Status and Estrogen.Status to dummy variables and renaming those:
+```{r}
+bc$Status <- ifelse(bc$Status == "Dead", 1, 0)
+bc$Progesterone.Status <- ifelse(bc$Progesterone.Status == "Positive", 1, 0)
+bc$Estrogen.Status <- ifelse(bc$Estrogen.Status == "Positive", 1, 0)
+```
+
+```{r}
+bc <- bc %>%
+  rename(
+    Dead = "Status",
+    Prog.Pos = "Progesterone.Status",
+    Estro.Pos = "Estrogen.Status",
+    Reg.N.Pos = "Reginol.Node.Positive",
+    Reg.N.Ex = "Regional.Node.Examined"
+  )
+```
+
+
+## 2) Interaction terms
+
+We add an age^2 variable:
+```{r}
+bc$Agesq <- bc$Age^2
+```
+
+
+For Regional.Node.Examined and Regional.Node.Positive, we can't have more positive lymph nodes than we have examined. This can be seen in this plot:
+```{r}
+plot(bc$Reg.N.Ex, bc$Reg.N.Pos)
+```
+
+
+## 3) Used models
+The three models we test on are given here.
+
+### Model 1
+Model of the data, leaving out variables that are linked (perfect multicollinearity)
+$$
+\begin{aligned}
+    SurvivalMonths_i &= \beta_0 + \beta_1 Age_i + \beta_2 Race_i + \beta_3 MaritalStatus_i + \beta_4 Grade_i \\ 
+    & \quad + \beta_5 AStage_i + \beta_6 TumorSize_i + \beta_7 EstroPos_i + \beta_8 ProgPos_i \\
+    & \quad + \beta_9 RegNPos_i + \beta_{10} RegNEx_i + u_i
+\end{aligned}
+$$
+
+### Model 2
+Model 1 with interaction terms and MaritalStatus dropped
+$$
+\begin{aligned}
+    SurvivalMonths_i &= \beta_0 + \beta_1 Age_i + \beta_2 Age^2_i + \beta_3 Race_i + \beta_4 Grade_i + \beta_5 AStage_i \\
+    & \quad + \beta_6 TumorSize_i + \beta_7 EstroPos_i + \beta_8 ProgPos_i  \\
+    & \quad +  \beta_9 (EstroPos_i \cdot ProgPos_i) \\ \nonumber
+    & \quad + \beta_{10} RegNPos_i + \beta_{11} (RegNPos_i \cdot RegNEx_i) + u_i
+\end{aligned}
+$$
+
+### Model 3
+Model 2 without the EstroPos and ProgPos interaction term.
+$$
+\begin{aligned}
+    \nonumber SurvivalMonths_i &= \beta_0 + \beta_1 Age_i + \beta_2 Age^2_i + \beta_3 Race_i + \beta_4 Grade_i + \beta_5 AStage_i \\ 
+    & \quad + \beta_6 TumorSize_i + \beta_7 EstroPos_i + \beta_8 ProgPos_i + \beta_9 RegNPos_i \\ \nonumber
+    & \quad + \beta_{10} (RegNPos_i \cdot RegNEx_i) + u_i
+\end{aligned}
+$$
+
+## 4) Naive OLS
+
+We run a naive OLS on model 1:
+```{r}
+LM1 <-
+  lm(
+    data = bc,
+    formula = Survival.Months ~ Age + Race + Marital.Status + Grade + A.Stage + Tumor.Size + Estro.Pos + Prog.Pos + Reg.N.Pos + Reg.N.Ex
+  )
+summary(LM1)
+```
+
+And on model 2:
+```{r}
+LM2 <-
+  lm(
+    data = bc,
+    formula = Survival.Months ~ Age + Agesq + Race + Grade + A.Stage + Tumor.Size + Estro.Pos *
+      Prog.Pos + Reg.N.Pos + Reg.N.Ex:Reg.N.Pos
+  )
+summary(LM2)
+```
+
+## 5) Truncation
+
+We use the truncreg() function to test our regression taking truncation into consideration.
+
+We first do this on model 1:
+```{r}
+trunc1 <-
+  truncreg(
+    data = bc,
+    formula = Survival.Months ~ Age + Race + Marital.Status + Grade + A.Stage + Tumor.Size + Estro.Pos + Prog.Pos + Reg.N.Pos + Reg.N.Ex,
+    point = 1.0,
+    direction = "left"
+  )
+summary(trunc1)
+```
+
+Then on model 2:
+```{r}
+trunc2 <-
+  truncreg(
+    data = bc,
+    formula = Survival.Months ~ Age + Agesq + Race + Grade + A.Stage + Tumor.Size + Estro.Pos *
+      Prog.Pos + Reg.N.Pos + Reg.N.Ex:Reg.N.Pos,
+    point = 1.0,
+    direction = "left"
+  )
+summary(trunc2)
+```
+
+
+## 6) Censoring
+We use the survreg()-function to take our right sided censoring into consideration
+
+First on model 1:
+```{r}
+tobit1 <-
+  survreg(
+    data = bc,
+    formula = Surv(Survival.Months, Dead, type = 'right') ~ Age + Race + Marital.Status + Grade + A.Stage + Tumor.Size + Estro.Pos + Prog.Pos + Reg.N.Pos + Reg.N.Ex,
+    dist = "gaussian",
+    x = TRUE
+  )
+summary(tobit1)
+```
+
+Then on model 2:
+```{r}
+tobit2 <-
+  survreg(
+    data = bc,
+    formula = Surv(Survival.Months, Dead, type = 'right') ~ Age + Agesq + Race + Grade + A.Stage + Tumor.Size + Estro.Pos *
+      Prog.Pos + Reg.N.Pos + Reg.N.Ex:Reg.N.Pos,
+    dist = "gaussian"
+  )
+summary(tobit2)
+```
+
+Finally on model 3:
+```{r}
+tobit3 <-
+  survreg(
+    data = bc,
+    formula = Surv(Survival.Months, Dead, type = 'right') ~ Age + Agesq + Race + Grade + A.Stage + Tumor.Size + Estro.Pos + Prog.Pos + Reg.N.Pos + Reg.N.Pos:Reg.N.Ex,
+    dist = "gaussian",
+    x = TRUE
+  )
+summary(tobit3)
+```
+
+### Adjustment factors
+
+We take a look at our tobit3 model after applying the adjustment factors.
+
+```{r}
+adj = pnorm(abs(apply(tobit3$x,2,FUN=mean) * tobit3$coef) / sqrt(diag(vcov(tobit3)))[-1])
+adj
+```
+
+```{r}
+adj * tobit3$coef
+```
+
+
+## 7) Figures
+
+### Error terms
+We check if our error terms are normally distributed:
+```{r}
+res = residuals(tobit3)
+qqnorm(res, main = "Normal QQ-plot of Residuals")
+qqline(res)
+```
+
+
+### Homoskedasticity 
+```{r}
+plot(fitted(tobit3),
+     res,
+     main = "Residuals vs Fitted",
+     xlab = "Fitted values",
+     ylab = "Residuals")
+abline(lm(res ~ fitted(tobit3)), col = "red")
+abline(0, 0)
+```
